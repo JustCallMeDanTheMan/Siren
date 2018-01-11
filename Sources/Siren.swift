@@ -36,6 +36,21 @@ public final class Siren: NSObject {
     /// The debug flag, which is disabled by default.
     /// When enabled, a stream of print() statements are logged to your console when a version check is performed.
     public lazy var debugEnabled = false
+    
+    /// Alternative URL, to allow easy testing and to facilitate Siren working with
+    ///  apps currently only on TestFlight (by using an alternative self-hosted JSON file)
+    /// Defaults to "", where the regular iTunes URL will be used
+    /// When set to an alternative URL, it will be used instead
+    /// NOTE: When self hosting, often only http:// is available, this needs an exception in Info.plist for the given domain
+    ///  see https://stackoverflow.com/questions/31254725/transport-security-has-blocked-a-cleartext-http for more info
+    ///  in particular, the answer https://stackoverflow.com/a/41542154
+    public lazy var altUrl = ""
+    
+    /// Release notes, to be displayed to the user, will be retrieved from JSON
+    public lazy var releaseNotes = ""
+    
+    /// Option to determine if the app may be found in TestFlight, or the app store (default)
+    public lazy var appIsInTestFlight = false
 
     /// Determines the type of alert that should be shown.
     /// See the Siren.AlertType enum for full details.
@@ -78,7 +93,7 @@ public final class Siren: NSObject {
     public var countryCode: String?
 
     /// Overrides the default localization of a user's device when presenting the update message and button titles in the alert.
-    /// See the Siren.LanguageType enum for more details.
+    /// See the Siren.LanguageType enum for m/Users/user908255/Documents/OneDrive/- Files -/Wealth/Aegis/Apps/iOS/My PT Accounting/My PT Accounts/Pods/Siren/Sources/Siren.swiftore details.
     public var forceLanguageLocalization: Siren.LanguageType?
 
     /// Overrides the tint color for UIAlertController.
@@ -153,6 +168,17 @@ public final class Siren: NSObject {
             UIApplication.shared.openURL(url)
         }
     }
+    
+    public func launchTestFlight() {
+        guard let appID = appID,
+            let url = URL(string: "itms-beta://beta.itunes.apple.com/v1/app/\(appID)") else {
+                return
+        }
+        
+        DispatchQueue.main.async {
+            UIApplication.shared.openURL(url)
+        }
+    }
 
 }
 
@@ -162,7 +188,12 @@ private extension Siren {
 
     func performVersionCheck() {
         do {
-            let url = try iTunesURLFromString()
+            let url: URL
+            if altUrl.isEmpty {
+                url = try iTunesURLFromString()
+            } else {
+                url = try checkAltURLString()
+            }
             let request = URLRequest(url: url, cachePolicy: .reloadIgnoringCacheData, timeoutInterval: 30)
             URLSession.shared.dataTask(with: request, completionHandler: { [unowned self] (data, response, error) in
                 self.processResults(withData: data, response: response, error: error)
@@ -233,6 +264,8 @@ private extension Siren {
             self.printMessage(message)
             return
         }
+        
+        self.releaseNotes = model.results.first?.releaseNotes ?? ""
 
         showAlertIfCurrentAppStoreVersionNotSkipped()
     }
@@ -256,6 +289,15 @@ private extension Siren {
             throw SirenError.Known.malformedURL
         }
 
+        return url
+    }
+    
+    func checkAltURLString() throws -> URL {
+        guard let url = URLComponents(string: altUrl)?.url,
+            !url.absoluteString.isEmpty else {
+            throw SirenError.Known.malformedURL
+        }
+        
         return url
     }
 }
@@ -313,7 +355,11 @@ private extension Siren {
         let title = localizedUpdateButtonTitle()
         let action = UIAlertAction(title: title, style: .default) { [unowned self] _ in
             self.hideWindow()
-            self.launchAppStore()
+            if (self.appIsInTestFlight) {
+                self.launchTestFlight()
+            } else {
+                self.launchAppStore()
+            }
             self.delegate?.sirenUserDidLaunchAppStore()
             self.alertViewIsVisible = false
             return
@@ -387,7 +433,11 @@ private extension Siren {
 
 private extension Siren {
     func localizedNewVersionMessage() -> String {
-        let newVersionMessageToLocalize = "A new version of %@ is available. Please update to version %@ now."
+        var newVersionMessageToLocalize = "A new version of %@ is available. Please update to version %@ now."
+        if (releaseNotes != "") {
+            newVersionMessageToLocalize += "\nWhat's new in the updated version:\n\n"
+            newVersionMessageToLocalize += releaseNotes
+        }
         let newVersionMessage = Bundle.localizedString(forKey: newVersionMessageToLocalize, forceLanguageLocalization: forceLanguageLocalization)
 
         guard let currentAppStoreVersion = currentAppStoreVersion else {
